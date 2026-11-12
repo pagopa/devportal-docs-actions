@@ -1,0 +1,109 @@
+name: Trigger Update Doc
+description: |
+  Creates a file containing the product name, pull request title, body and diff,
+  and pushes it to a branch in `pagopa/devportal-docs-updater`.
+  The diff file name will be `<source repository name>-<PR number>.diff`.
+
+inputs:
+  product-name:
+    description: The name of the product, included at the beginning of the diff file.
+    required: true
+  pr-number:
+    description: The number of the PR.
+    required: true
+  updater-gh-token:
+    description: |
+      A token with contents read and write access to
+      `pagopa/devportal-docs-updater`.
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Create the PR diff.
+      id: diff
+      shell: bash
+      env:
+        PRODUCT_NAME: ${{ inputs.product-name }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+
+        if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+          echo "❌ Input pr-number must be a positive integer." >&2
+          exit 1
+        fi
+        if [[ -z "$GH_TOKEN" ]]; then
+          echo "❌ The workflow token is required to read the source PR." >&2
+          exit 1
+        fi
+
+        # Create a temporary working directory for the diff file.
+        WORK_DIR="$(mktemp -d "$GITHUB_WORKSPACE/.devportal-update.XXXXXX")"
+        
+        # Create the diff file and add the product name at the beginning.
+        printf '%s\n\n' "$PRODUCT_NAME" > "$WORK_DIR/pr.diff"
+
+        # Fetch the PR title and body and append them to the diff file.
+        gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+          --json title,body --jq '.title + "\n\n" + .body' >> "$WORK_DIR/pr.diff"
+        
+        # Add some spacing before appending the diff.
+        printf '\n\n' >> "$WORK_DIR/pr.diff"
+
+        # Fetch the PR diff and append it to the diff file.
+        gh pr diff "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" >> "$WORK_DIR/pr.diff"
+
+        # Output the working directory for subsequent steps.
+        echo "dir=${WORK_DIR##*/}" >> "$GITHUB_OUTPUT"
+
+    - name: Checkout devportal-docs-updater.
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: pagopa/devportal-docs-updater
+        token: ${{ inputs.updater-gh-token }}
+        path: ${{ steps.diff.outputs.dir }}/updater
+
+    - name: Commit and push the PR diff.
+      shell: bash
+      working-directory: ${{ github.workspace }}/${{ steps.diff.outputs.dir }}/updater
+      env:
+        PR_NUMBER: ${{ inputs.pr-number }}
+      run: |
+        set -euo pipefail
+
+        # Determine the branch name for the PR diff.
+        BRANCH_NAME="${GITHUB_REPOSITORY#*/}-$PR_NUMBER"
+
+        # Check if the branch already exists on the remote.
+        if git ls-remote --exit-code --heads origin "refs/heads/$BRANCH_NAME" > /dev/null; then
+          # The branch exists on the remote, fetch and switch to it.
+          git fetch origin \
+            "refs/heads/$BRANCH_NAME:refs/remotes/origin/$BRANCH_NAME"
+          git switch -c "$BRANCH_NAME" "refs/remotes/origin/$BRANCH_NAME"
+        else
+          # The branch does not exist on the remote, create a new one.
+          status=$?
+          if [[ "$status" -ne 2 ]]; then
+            echo "❌ Error while checking the remote branch." >&2
+            exit "$status"
+          fi
+          git switch -c "$BRANCH_NAME"
+        fi
+
+        mkdir -p working
+        mv ../pr.diff "working/$BRANCH_NAME.diff"
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git add -- "working/$BRANCH_NAME.diff"
+
+        # Check if there are any staged changes before committing.
+        if git diff --cached --quiet; then
+          # No changes to commit.
+          echo "ℹ️ File already up-to-date: no commit needed."
+        else
+          # Commit and push the changes if there are any.
+          git commit -m "Updated diff for PR $PR_NUMBER on repository $GITHUB_REPOSITORY"
+          git push origin "$BRANCH_NAME"
+        fi
