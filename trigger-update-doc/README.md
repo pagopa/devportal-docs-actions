@@ -48,6 +48,9 @@ jobs:
         with:
           client-id: ${{ vars.DEVPORTAL_DOCS_UPDATER_INTERNAL_CLIENT_ID }}
           private-key: ${{ secrets.DEVPORTAL_DOCS_UPDATER_INTERNAL_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: devportal-docs-updater
+          permission-contents: write
           
       - name: Trigger documentation update
         uses: pagopa/devportal-docs-actions/trigger-update-doc@<ref 2>
