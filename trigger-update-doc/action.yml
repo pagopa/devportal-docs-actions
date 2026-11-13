@@ -13,8 +13,8 @@ inputs:
     required: true
   updater-gh-token:
     description: |
-      A token with contents read and write access to
-      `pagopa/devportal-docs-updater`.
+      The installation token of the `devportal-docs-updater-internal`
+      GitHub App, generated with `actions/create-github-app-token`.
     required: true
 
 runs:
